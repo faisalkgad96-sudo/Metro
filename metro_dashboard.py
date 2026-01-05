@@ -155,12 +155,16 @@ st.markdown("""
 # ===============================
 # CONFIG
 # ===============================
-DATA_DIR = "data/2025"
+BASE_DATA_DIR = "data"
 CONFIG_FILE = "config/stations.json"
-os.makedirs(DATA_DIR, exist_ok=True)
+AVAILABLE_YEARS = [2025, 2026]
+
+os.makedirs(BASE_DATA_DIR, exist_ok=True)
 os.makedirs("config", exist_ok=True)
 
-MONTHS = [f"2025-{str(i).zfill(2)}" for i in range(1, 13)]
+# Create directories for each year
+for year in AVAILABLE_YEARS:
+    os.makedirs(os.path.join(BASE_DATA_DIR, str(year)), exist_ok=True)
 
 # Required columns in uploaded data
 REQUIRED_COLUMNS = {
@@ -229,6 +233,10 @@ STATIONS = load_stations()
 # ===============================
 # HELPERS
 # ===============================
+def get_months_for_year(year):
+    """Generate list of months for a given year."""
+    return [f"{year}-{str(i).zfill(2)}" for i in range(1, 13)]
+
 def validate_dataframe(df):
     """Validate that dataframe contains all required columns."""
     missing = [col for col in REQUIRED_COLUMNS.keys() if col not in df.columns]
@@ -270,8 +278,12 @@ def filter_by_station(df, col, keyword):
 def prev_month(month):
     """Get previous month string."""
     y, m = month.split("-")
-    m = int(m)
-    return f"{y}-{m-1:02d}" if m > 1 else None
+    y, m = int(y), int(m)
+    if m > 1:
+        return f"{y}-{m-1:02d}"
+    elif y > min(AVAILABLE_YEARS):
+        return f"{y-1}-12"
+    return None
 
 def trend_delta(current, previous):
     """Calculate percentage change between current and previous values."""
@@ -288,8 +300,11 @@ def load_month(month):
     if not month:
         return None
     
+    year = month.split("-")[0]
+    data_dir = os.path.join(BASE_DATA_DIR, year)
+    
     for ext in ["csv", "xlsx"]:
-        path = os.path.join(DATA_DIR, f"{month}.{ext}")
+        path = os.path.join(data_dir, f"{month}.{ext}")
         if os.path.exists(path):
             try:
                 if ext == "csv":
@@ -303,15 +318,21 @@ def load_month(month):
     
     return None
 
-def get_uploaded_months():
+def get_uploaded_months(year=None):
     """Get list of months that have data uploaded."""
     uploaded = []
-    for m in MONTHS:
-        for ext in ["csv", "xlsx"]:
-            if os.path.exists(os.path.join(DATA_DIR, f"{m}.{ext}")):
-                uploaded.append(m)
-                break
-    return uploaded
+    years_to_check = [year] if year else AVAILABLE_YEARS
+    
+    for y in years_to_check:
+        data_dir = os.path.join(BASE_DATA_DIR, str(y))
+        months = get_months_for_year(y)
+        for m in months:
+            for ext in ["csv", "xlsx"]:
+                if os.path.exists(os.path.join(data_dir, f"{m}.{ext}")):
+                    uploaded.append(m)
+                    break
+    
+    return sorted(uploaded)
 
 # ===============================
 # STATION METRICS (CACHED)
@@ -457,7 +478,16 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📅 Upload Monthly Data")
     
-    upload_month = st.selectbox("Select Month", MONTHS, key="upload_month_select")
+    # Year selector
+    upload_year = st.selectbox(
+        "Select Year", 
+        AVAILABLE_YEARS, 
+        key="upload_year_select",
+        index=len(AVAILABLE_YEARS)-1  # Default to latest year
+    )
+    
+    upload_months = get_months_for_year(upload_year)
+    upload_month = st.selectbox("Select Month", upload_months, key="upload_month_select")
     
     file = st.file_uploader(
         f"Upload data for {upload_month}",
@@ -482,7 +512,8 @@ with st.sidebar:
                     st.text(error_msg)
             else:
                 df_up = clean_df(df_up)
-                path = os.path.join(DATA_DIR, f"{upload_month}.{ext}")
+                year_dir = os.path.join(BASE_DATA_DIR, str(upload_year))
+                path = os.path.join(year_dir, f"{upload_month}.{ext}")
                 
                 if ext == "csv":
                     df_up.to_csv(path, index=False)
@@ -498,20 +529,26 @@ with st.sidebar:
     # Show uploaded months
     st.markdown("---")
     st.markdown("### 📊 Uploaded Data")
-    uploaded = get_uploaded_months()
     
-    if uploaded:
-        for m in uploaded:
-            col1, col2 = st.columns([3, 1])
-            col1.markdown(f"✓ {m}")
-            if col2.button("🗑️", key=f"del_{m}"):
-                for e in ["csv", "xlsx"]:
-                    path = os.path.join(DATA_DIR, f"{m}.{e}")
-                    if os.path.exists(path):
-                        os.remove(path)
-                st.cache_data.clear()
-                st.rerun()
-    else:
+    # Group by year
+    for year in AVAILABLE_YEARS:
+        uploaded = get_uploaded_months(year)
+        
+        if uploaded:
+            st.markdown(f"**{year}**")
+            for m in uploaded:
+                col1, col2 = st.columns([3, 1])
+                col1.markdown(f"✓ {m}")
+                if col2.button("🗑️", key=f"del_{m}"):
+                    year_from_month = m.split("-")[0]
+                    for e in ["csv", "xlsx"]:
+                        path = os.path.join(BASE_DATA_DIR, year_from_month, f"{m}.{e}")
+                        if os.path.exists(path):
+                            os.remove(path)
+                    st.cache_data.clear()
+                    st.rerun()
+    
+    if not get_uploaded_months():
         st.info("No data uploaded yet")
 
 # ===============================
@@ -523,18 +560,22 @@ st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 18px; marg
 # ===============================
 # MAIN CONTROLS
 # ===============================
-col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+col1, col2, col3, col4, col5 = st.columns([2, 1, 2, 1, 1])
 
 with col1:
     station = st.selectbox("🚉 Station", list(STATIONS.keys()), label_visibility="collapsed", placeholder="Select Station")
 
 with col2:
-    month = st.selectbox("📅 Month", MONTHS, label_visibility="collapsed", placeholder="Select Month")
+    selected_year = st.selectbox("📆 Year", AVAILABLE_YEARS, label_visibility="collapsed", index=len(AVAILABLE_YEARS)-1)
 
 with col3:
-    show_comparison = st.checkbox("📊 Compare", value=True, help="Compare with previous month")
+    available_months = get_months_for_year(selected_year)
+    month = st.selectbox("📅 Month", available_months, label_visibility="collapsed", placeholder="Select Month")
 
 with col4:
+    show_comparison = st.checkbox("📊 Compare", value=True, help="Compare with previous month")
+
+with col5:
     view_mode = st.selectbox("View", ["Station", "All Stations"], label_visibility="collapsed")
 
 # ===============================
