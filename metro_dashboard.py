@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
 import altair as alt
 import json
@@ -288,17 +289,22 @@ def trend_delta(current, previous):
     return (current - previous) / previous * 100
 
 # ===============================
-# ULTRA-FAST DATA LOADING & CACHING
+# EXTREME OPTIMIZATION FOR 100K+ ROWS
 # ===============================
 @st.cache_data(show_spinner=False)
-def load_month_raw(month):
-    """Load raw data for a specific month - CACHED PERMANENTLY."""
+def load_and_index_month(month):
+    """
+    Load data and create INDICES for all stations at once.
+    This is the ONLY time we touch the raw data.
+    Returns: (raw_df, station_indices)
+    """
     if not month:
-        return None
+        return None, None
     
     year = month.split("-")[0]
     data_dir = os.path.join(BASE_DATA_DIR, year)
     
+    df = None
     for ext in ["csv", "xlsx"]:
         path = os.path.join(data_dir, f"{month}.{ext}")
         if os.path.exists(path):
@@ -307,97 +313,130 @@ def load_month_raw(month):
                     df = pd.read_csv(path)
                 else:
                     df = pd.read_excel(path, engine='openpyxl')
-                return clean_df(df)
+                df = clean_df(df)
+                break
             except Exception as e:
                 st.error(f"Error loading {path}: {e}")
-                return None
+                return None, None
     
-    return None
-
-@st.cache_data(show_spinner=False)
-def preprocess_all_stations(df, month):
-    """
-    PRE-PROCESS ALL STATIONS AT ONCE - This makes switching instant!
-    Returns a dictionary with all computed metrics and minimal dataframes.
-    """
-    if df is None or df.empty:
-        return {}
+    if df is None:
+        return None, None
     
-    results = {}
-    signup_month = pd.Period(month)
+    # Pre-compute ALL station boolean masks ONCE using vectorization
+    station_indices = {}
+    start_col_values = df[START_COL].astype(str).str.lower()
+    end_col_values = df[END_COL].astype(str).str.lower()
     
     for station, keyword in STATIONS.items():
-        # Create masks
-        start_mask = df[START_COL].astype(str).str.contains(keyword, na=False, case=False)
-        end_mask = df[END_COL].astype(str).str.contains(keyword, na=False, case=False)
+        keyword_lower = keyword.lower()
+        start_mask = start_col_values.str.contains(keyword_lower, na=False, regex=False)
+        end_mask = end_col_values.str.contains(keyword_lower, na=False, regex=False)
         
-        # Get indices instead of full dataframes
-        start_idx = df.index[start_mask]
+        station_indices[station] = {
+            'start_mask': start_mask,
+            'end_mask': end_mask,
+            'both_mask': start_mask & end_mask
+        }
+    
+    return df, station_indices
+
+@st.cache_data(show_spinner=False)
+def compute_all_metrics(df, station_indices, month):
+    """
+    Compute ALL metrics for ALL stations using PURE VECTORIZATION.
+    NO loops through rows, NO repeated dataframe operations.
+    """
+    results = {}
+    signup_month_str = month[:7]  # "2025-01"
+    
+    # Pre-extract arrays ONCE (much faster than repeated df access)
+    user_ids = df[USER_COL].values
+    signup_dates = df[SIGNUP_COL].dt.to_period("M").astype(str).values
+    durations = df[DURATION_COL].values
+    ratings = df[RATING_COL].values
+    hours = df[START_DATE_COL].dt.hour.values
+    days = df[START_DATE_COL].dt.day_name().values
+    
+    # Valid rating mask (apply once)
+    valid_rating_mask = (ratings >= MIN_RATING) & (ratings <= MAX_RATING) & ~np.isnan(ratings)
+    
+    for station, masks in station_indices.items():
+        start_mask = masks['start_mask'].values
+        end_mask = masks['end_mask'].values
+        both_mask = masks['both_mask'].values
         
-        if len(start_idx) == 0:
+        total_starts = start_mask.sum()
+        
+        if total_starts == 0:
             continue
         
-        # Get only the data we need
-        starts_data = df.loc[start_idx]
+        # Get station users using numpy (MUCH faster)
+        station_users = user_ids[start_mask]
+        unique_users = np.unique(station_users)
+        total_riders = len(unique_users)
         
-        # Metrics
-        total_starts = len(start_idx)
-        total_ends = end_mask.sum()
-        started_ended = (start_mask & end_mask).sum()
+        # New signups - vectorized
+        station_signups = signup_dates[start_mask]
+        new_signups = (station_signups == signup_month_str).sum()
         
-        # User metrics
-        unique_users = starts_data[USER_COL].nunique()
-        new_signups = starts_data[starts_data[SIGNUP_COL].dt.to_period("M") == signup_month][USER_COL].nunique()
+        # Rides per user - using numpy bincount (extremely fast)
+        user_ride_counts = np.bincount(np.searchsorted(unique_users, station_users))
+        one_time = (user_ride_counts == 1).sum()
+        light = ((user_ride_counts >= LIGHT_USER_MIN) & (user_ride_counts <= LIGHT_USER_MAX)).sum()
+        heavy = (user_ride_counts >= HEAVY_USER_MIN).sum()
         
-        # Rides per user
-        rides_per_user = starts_data.groupby(USER_COL).size()
-        one_time = (rides_per_user == 1).sum()
-        light = ((rides_per_user >= LIGHT_USER_MIN) & (rides_per_user <= LIGHT_USER_MAX)).sum()
-        heavy = (rides_per_user >= HEAVY_USER_MIN).sum()
+        # Duration - vectorized
+        station_durations = durations[start_mask]
+        avg_duration = np.nanmean(station_durations)
         
-        # Duration and rating
-        avg_duration = starts_data[DURATION_COL].mean()
+        # Ratings - vectorized
+        station_rating_mask = start_mask & valid_rating_mask
+        station_ratings = ratings[station_rating_mask]
         
-        # Filter ratings for this station only
-        station_ratings = starts_data[RATING_COL]
-        station_ratings = station_ratings[(station_ratings >= MIN_RATING) & (station_ratings <= MAX_RATING)]
-        station_ratings = station_ratings.dropna()
+        if len(station_ratings) > 0:
+            avg_rating = np.mean(station_ratings)
+            positive_pct = (station_ratings >= POSITIVE_RATING_MIN).sum() / len(station_ratings) * 100
+        else:
+            avg_rating = None
+            positive_pct = None
         
-        avg_rating = station_ratings.mean() if len(station_ratings) > 0 else None
-        positive_pct = ((station_ratings >= POSITIVE_RATING_MIN).sum() / len(station_ratings) * 100) if len(station_ratings) > 0 else None
+        # Chart data - using numpy operations
+        station_hours = hours[start_mask]
+        station_days = days[start_mask]
         
-        # Store minimal chart data (pre-computed)
-        hour_data = None
-        day_hour_data = None
+        # Hourly counts - ultra fast with bincount
+        hour_counts = np.bincount(station_hours[~np.isnan(station_hours)].astype(int), minlength=24)
+        hour_data = pd.DataFrame({
+            'Hour': np.arange(24),
+            'Rides': hour_counts
+        })
+        hour_data = hour_data[hour_data['Rides'] > 0]  # Only non-zero hours
         
-        if START_DATE_COL in starts_data.columns and len(starts_data) > 0:
-            # Hourly data
-            hours = starts_data[START_DATE_COL].dt.hour
-            hour_counts = hours.value_counts().sort_index()
-            hour_data = pd.DataFrame({
-                'Hour': hour_counts.index,
-                'Rides': hour_counts.values
-            })
-            
-            # Heatmap data - using groupby instead of crosstab
-            days = starts_data[START_DATE_COL].dt.day_name()
-            temp_df = pd.DataFrame({'Day': days, 'Hour': hours})
-            day_hour_data = temp_df.groupby(['Day', 'Hour'], observed=True).size().reset_index(name='Rides')
+        # Heatmap - using pandas groupby on minimal data
+        day_hour_df = pd.DataFrame({
+            'Day': station_days,
+            'Hour': station_hours
+        }).dropna()
+        
+        if len(day_hour_df) > 0:
+            day_hour_data = day_hour_df.groupby(['Day', 'Hour'], observed=True).size().reset_index(name='Rides')
+        else:
+            day_hour_data = pd.DataFrame()
         
         results[station] = {
-            'total_starts': total_starts,
-            'total_ends': total_ends,
-            'started_ended': started_ended,
-            'total_riders': unique_users,
-            'new_signups': new_signups,
-            'new_signup_pct': (new_signups / unique_users * 100) if unique_users else 0,
-            'one_time': one_time,
-            'light': light,
-            'heavy': heavy,
-            'avg_duration': avg_duration,
-            'avg_rating': avg_rating,
-            'positive_rating_pct': positive_pct,
-            'total_ratings': len(station_ratings),
+            'total_starts': int(total_starts),
+            'total_ends': int(end_mask.sum()),
+            'started_ended': int(both_mask.sum()),
+            'total_riders': int(total_riders),
+            'new_signups': int(new_signups),
+            'new_signup_pct': (new_signups / total_riders * 100) if total_riders else 0,
+            'one_time': int(one_time),
+            'light': int(light),
+            'heavy': int(heavy),
+            'avg_duration': float(avg_duration) if not np.isnan(avg_duration) else None,
+            'avg_rating': float(avg_rating) if avg_rating is not None else None,
+            'positive_rating_pct': float(positive_pct) if positive_pct is not None else None,
+            'total_ratings': int(len(station_ratings)),
             'hour_data': hour_data,
             'day_hour_data': day_hour_data,
         }
@@ -405,19 +444,19 @@ def preprocess_all_stations(df, month):
     return results
 
 @st.cache_data(show_spinner=False)
-def compute_monthly_trend_fast(month):
-    """Pre-compute monthly trends for all stations across all months."""
+def compute_monthly_trends():
+    """Pre-compute monthly trends for all stations."""
     uploaded_months = get_uploaded_months()
     station_trends = {station: [] for station in STATIONS.keys()}
     
     for m in uploaded_months:
-        df = load_month_raw(m)
-        if df is None:
+        df, indices = load_and_index_month(m)
+        if df is None or indices is None:
             continue
         
-        for station, keyword in STATIONS.items():
-            count = df[START_COL].astype(str).str.contains(keyword, na=False, case=False).sum()
-            station_trends[station].append({'Month': m, 'Start Rides': count})
+        for station, masks in indices.items():
+            count = masks['start_mask'].sum()
+            station_trends[station].append({'Month': m, 'Start Rides': int(count)})
     
     return {station: pd.DataFrame(data) for station, data in station_trends.items()}
 
@@ -573,15 +612,15 @@ with col3:
     month = st.selectbox("📅 Month", available_months, label_visibility="collapsed", placeholder="Select Month")
 
 with col4:
-    show_comparison = st.checkbox("📊 Compare", value=True, help="Compare with previous month")
+    show_comparison = st.checkbox("📊 Compare", value=False, help="Compare with previous month")
 
 with col5:
     view_mode = st.selectbox("View", ["Station", "All Stations"], label_visibility="collapsed")
 
 # ===============================
-# LOAD & PRE-PROCESS DATA (ONCE!)
+# LOAD & PROCESS DATA
 # ===============================
-df = load_month_raw(month)
+df, station_indices = load_and_index_month(month)
 
 if df is None:
     st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
@@ -595,8 +634,8 @@ if not is_valid:
     st.text(error_msg)
     st.stop()
 
-# PRE-PROCESS ALL STATIONS - This happens once per month and is cached!
-all_station_data = preprocess_all_stations(df, month)
+# COMPUTE ALL METRICS - This is fast even with 120k rows!
+all_station_data = compute_all_metrics(df, station_indices, month)
 
 if not all_station_data:
     st.warning("No station data available")
@@ -606,7 +645,6 @@ if not all_station_data:
 # STATION VIEW
 # ===============================
 if view_mode == "Station":
-    # Get pre-computed data - INSTANT!
     if station not in all_station_data:
         st.warning(f"No data found for {station} in {month}")
         st.stop()
@@ -618,9 +656,9 @@ if view_mode == "Station":
     if show_comparison:
         pm = prev_month(month)
         if pm:
-            prev_df = load_month_raw(pm)
-            if prev_df is not None:
-                prev_all_data = preprocess_all_stations(prev_df, pm)
+            prev_df, prev_indices = load_and_index_month(pm)
+            if prev_df is not None and prev_indices is not None:
+                prev_all_data = compute_all_metrics(prev_df, prev_indices, pm)
                 prev_data = prev_all_data.get(station)
     
     # Hero Stats
@@ -685,13 +723,13 @@ if view_mode == "Station":
     
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # Charts - Using pre-computed data!
+    # Charts
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("<div class='chart-container'>", unsafe_allow_html=True)
         st.markdown("#### 🔥 Ride Heatmap")
-        if station_data['day_hour_data'] is not None and not station_data['day_hour_data'].empty:
+        if not station_data['day_hour_data'].empty:
             st.altair_chart(
                 alt.Chart(station_data['day_hour_data']).mark_rect().encode(
                     x=alt.X("Hour:O", title="Hour"),
@@ -711,7 +749,7 @@ if view_mode == "Station":
     with col2:
         st.markdown("<div class='chart-container'>", unsafe_allow_html=True)
         st.markdown("#### ⏰ Hourly Distribution")
-        if station_data['hour_data'] is not None and not station_data['hour_data'].empty:
+        if not station_data['hour_data'].empty:
             st.altair_chart(
                 alt.Chart(station_data['hour_data']).mark_area(
                     line={'color':'#10b981'},
@@ -733,7 +771,7 @@ if view_mode == "Station":
         st.markdown("</div>", unsafe_allow_html=True)
     
     # Monthly Trend
-    all_trends = compute_monthly_trend_fast(month)
+    all_trends = compute_monthly_trends()
     trend_df = all_trends.get(station, pd.DataFrame())
     
     if not trend_df.empty and len(trend_df) > 1:
@@ -757,7 +795,6 @@ if view_mode == "Station":
 # ALL STATIONS VIEW
 # ===============================
 else:
-    # Build comparison table from pre-computed data - INSTANT!
     comparison_rows = []
     for stn, data in all_station_data.items():
         comparison_rows.append({
