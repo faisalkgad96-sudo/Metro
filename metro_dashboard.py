@@ -326,9 +326,6 @@ def preprocess_all_stations(df, month):
     results = {}
     signup_month = pd.Period(month)
     
-    # Pre-filter ratings once
-    valid_ratings = df[RATING_COL].between(MIN_RATING, MAX_RATING, inclusive='both')
-    
     for station, keyword in STATIONS.items():
         # Create masks
         start_mask = df[START_COL].astype(str).str.contains(keyword, na=False, case=False)
@@ -361,7 +358,11 @@ def preprocess_all_stations(df, month):
         # Duration and rating
         avg_duration = starts_data[DURATION_COL].mean()
         
-        station_ratings = starts_data.loc[start_idx & valid_ratings, RATING_COL]
+        # Filter ratings for this station only
+        station_ratings = starts_data[RATING_COL]
+        station_ratings = station_ratings[(station_ratings >= MIN_RATING) & (station_ratings <= MAX_RATING)]
+        station_ratings = station_ratings.dropna()
+        
         avg_rating = station_ratings.mean() if len(station_ratings) > 0 else None
         positive_pct = ((station_ratings >= POSITIVE_RATING_MIN).sum() / len(station_ratings) * 100) if len(station_ratings) > 0 else None
         
