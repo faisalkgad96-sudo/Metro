@@ -271,10 +271,6 @@ def clean_df(df):
     
     return df
 
-def filter_by_station(df, col, keyword):
-    """Filter dataframe by station keyword."""
-    return df[df[col].astype(str).str.contains(keyword, na=False, case=False)]
-
 def prev_month(month):
     """Get previous month string."""
     y, m = month.split("-")
@@ -292,9 +288,9 @@ def trend_delta(current, previous):
     return (current - previous) / previous * 100
 
 # ===============================
-# LOAD MONTH (CACHED)
+# OPTIMIZED DATA LOADING
 # ===============================
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3600)
 def load_month(month):
     """Load data for a specific month from CSV or Excel file."""
     if not month:
@@ -310,7 +306,7 @@ def load_month(month):
                 if ext == "csv":
                     df = pd.read_csv(path)
                 else:
-                    df = pd.read_excel(path)
+                    df = pd.read_excel(path, engine='openpyxl')
                 return clean_df(df)
             except Exception as e:
                 st.error(f"Error loading {path}: {e}")
@@ -318,6 +314,7 @@ def load_month(month):
     
     return None
 
+@st.cache_data(show_spinner=False)
 def get_uploaded_months(year=None):
     """Get list of months that have data uploaded."""
     uploaded = []
@@ -325,6 +322,8 @@ def get_uploaded_months(year=None):
     
     for y in years_to_check:
         data_dir = os.path.join(BASE_DATA_DIR, str(y))
+        if not os.path.exists(data_dir):
+            continue
         months = get_months_for_year(y)
         for m in months:
             for ext in ["csv", "xlsx"]:
@@ -335,77 +334,90 @@ def get_uploaded_months(year=None):
     return sorted(uploaded)
 
 # ===============================
-# STATION METRICS (CACHED)
+# OPTIMIZED STATION FILTERING
 # ===============================
 @st.cache_data(show_spinner=False, ttl=3600)
-def compute_station_data(df, month):
-    """Compute all metrics for all stations for a given month."""
-    out = {}
+def filter_station_data(df, station_keyword, month):
+    """Filter and compute metrics for a single station - OPTIMIZED."""
+    # Pre-compute boolean masks
+    start_mask = df[START_COL].astype(str).str.contains(station_keyword, na=False, case=False)
+    end_mask = df[END_COL].astype(str).str.contains(station_keyword, na=False, case=False)
     
+    # Filter dataframes
+    starts = df[start_mask].copy()
+    ends = df[end_mask].copy()
+    started_ended = df[start_mask & end_mask]
+    
+    if len(starts) == 0:
+        return None
+    
+    # Compute metrics
+    total_riders = starts[USER_COL].nunique()
+    
+    # New signups - optimized
+    signup_month = pd.Period(month)
+    new_signups = starts[starts[SIGNUP_COL].dt.to_period("M") == signup_month][USER_COL].nunique()
+    
+    # Rides per user - optimized
+    rides_per_user = starts.groupby(USER_COL).size()
+    
+    # Rating stats - optimized
+    rating_series = starts[RATING_COL].dropna()
+    rating_series = rating_series[(rating_series >= MIN_RATING) & (rating_series <= MAX_RATING)]
+    avg_rating = rating_series.mean() if len(rating_series) > 0 else None
+    positive_pct = ((rating_series >= POSITIVE_RATING_MIN).sum() / len(rating_series) * 100) if len(rating_series) > 0 else None
+    
+    return {
+        "starts_df": starts,
+        "ends_df": ends,
+        "total_starts": len(starts),
+        "total_ends": len(ends),
+        "started_ended": len(started_ended),
+        "total_riders": total_riders,
+        "new_signups": new_signups,
+        "new_signup_pct": (new_signups / total_riders * 100) if total_riders else 0,
+        "one_time": (rides_per_user == 1).sum(),
+        "light": ((rides_per_user >= LIGHT_USER_MIN) & (rides_per_user <= LIGHT_USER_MAX)).sum(),
+        "heavy": (rides_per_user >= HEAVY_USER_MIN).sum(),
+        "avg_duration": starts[DURATION_COL].mean(),
+        "avg_rating": avg_rating,
+        "positive_rating_pct": positive_pct,
+        "total_ratings": len(rating_series),
+    }
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def compute_all_stations_data(df, month):
+    """Compute metrics for all stations - only used in All Stations view."""
+    results = {}
     for station, keyword in STATIONS.items():
-        starts = filter_by_station(df, START_COL, keyword)
-        ends = filter_by_station(df, END_COL, keyword)
-        
-        started_ended = df[
-            df[START_COL].astype(str).str.contains(keyword, na=False, case=False) &
-            df[END_COL].astype(str).str.contains(keyword, na=False, case=False)
-        ]
-        
-        riders = starts.copy()
-        total_riders = riders[USER_COL].nunique()
-        
-        new_signups = riders[
-            riders[SIGNUP_COL].dt.to_period("M") == pd.Period(month)
-        ][USER_COL].nunique()
-        
-        rides_per_user = riders.groupby(USER_COL).size()
-        
-        rating_series = pd.to_numeric(riders[RATING_COL], errors="coerce")
-        rating_series = rating_series[rating_series.between(MIN_RATING, MAX_RATING)]
-        avg_rating = rating_series.mean() if len(rating_series) > 0 else None
-        
-        positive_pct = (
-            (rating_series >= POSITIVE_RATING_MIN).sum() / len(rating_series) * 100
-            if len(rating_series) > 0 else None
-        )
-        
-        out[station] = {
-            "starts_df": starts,
-            "ends_df": ends,
-            "total_starts": len(starts),
-            "total_ends": len(ends),
-            "started_ended": len(started_ended),
-            "total_riders": total_riders,
-            "new_signups": new_signups,
-            "new_signup_pct": (new_signups / total_riders * 100) if total_riders else 0,
-            "one_time": (rides_per_user == 1).sum(),
-            "light": ((rides_per_user >= LIGHT_USER_MIN) & (rides_per_user <= LIGHT_USER_MAX)).sum(),
-            "heavy": (rides_per_user >= HEAVY_USER_MIN).sum(),
-            "avg_duration": riders[DURATION_COL].mean(),
-            "avg_rating": avg_rating,
-            "positive_rating_pct": positive_pct,
-            "total_ratings": len(rating_series),
-        }
-    
-    return out
+        data = filter_station_data(df, keyword, month)
+        if data:
+            results[station] = data
+    return results
 
 # ===============================
-# CHART DATA (CACHED)
+# OPTIMIZED CHART DATA
 # ===============================
 @st.cache_data(show_spinner=False, ttl=3600)
 def compute_heatmap(starts_df):
     """Compute heatmap data for rides by day and hour."""
-    df = starts_df.copy()
+    if starts_df.empty or START_DATE_COL not in starts_df.columns:
+        return pd.DataFrame()
+    
+    df = starts_df[[START_DATE_COL]].copy()
     df["Hour"] = df[START_DATE_COL].dt.hour
     df["Day"] = df[START_DATE_COL].dt.day_name()
-    return df.groupby(["Day", "Hour"]).size().reset_index(name="Rides")
+    return df.groupby(["Day", "Hour"], observed=True).size().reset_index(name="Rides")
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def compute_hourly_trend(starts_df):
     """Compute hourly ride counts."""
-    df = starts_df.copy()
+    if starts_df.empty or START_DATE_COL not in starts_df.columns:
+        return pd.DataFrame()
+    
+    df = starts_df[[START_DATE_COL]].copy()
     df["Hour"] = df[START_DATE_COL].dt.hour
-    return df.groupby("Hour").size().reset_index(name="Rides").sort_values("Hour")
+    return df.groupby("Hour", observed=True).size().reset_index(name="Rides").sort_values("Hour")
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def compute_monthly_trend(station_keyword):
@@ -418,26 +430,28 @@ def compute_monthly_trend(station_keyword):
         if df is None:
             continue
         
-        starts = filter_by_station(df, START_COL, station_keyword)
-        rows.append({"Month": m, "Start Rides": len(starts)})
+        # Quick count without creating full dataframe
+        count = df[START_COL].astype(str).str.contains(station_keyword, na=False, case=False).sum()
+        rows.append({"Month": m, "Start Rides": count})
     
     return pd.DataFrame(rows)
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def compute_station_comparison(df, month):
     """Compute comparison metrics across all stations."""
-    station_data = compute_station_data(df, month)
-    
     rows = []
-    for station, data in station_data.items():
-        rows.append({
-            "Station": station,
-            "Total Starts": data["total_starts"],
-            "Total Riders": data["total_riders"],
-            "Avg Duration": data["avg_duration"],
-            "Avg Rating": data["avg_rating"],
-            "Heavy Users": data["heavy"],
-        })
+    
+    for station, keyword in STATIONS.items():
+        data = filter_station_data(df, keyword, month)
+        if data:
+            rows.append({
+                "Station": station,
+                "Total Starts": data["total_starts"],
+                "Total Riders": data["total_riders"],
+                "Avg Duration": data["avg_duration"],
+                "Avg Rating": data["avg_rating"],
+                "Heavy Users": data["heavy"],
+            })
     
     return pd.DataFrame(rows)
 
@@ -483,7 +497,7 @@ with st.sidebar:
         "Select Year", 
         AVAILABLE_YEARS, 
         key="upload_year_select",
-        index=len(AVAILABLE_YEARS)-1  # Default to latest year
+        index=len(AVAILABLE_YEARS)-1
     )
     
     upload_months = get_months_for_year(upload_year)
@@ -499,10 +513,11 @@ with st.sidebar:
         try:
             ext = file.name.split(".")[-1]
             
-            if ext == "csv":
-                df_up = pd.read_csv(file)
-            else:
-                df_up = pd.read_excel(file)
+            with st.spinner("Loading file..."):
+                if ext == "csv":
+                    df_up = pd.read_csv(file)
+                else:
+                    df_up = pd.read_excel(file, engine='openpyxl')
             
             is_valid, missing, error_msg = validate_dataframe(df_up)
             
@@ -511,14 +526,15 @@ with st.sidebar:
                 with st.expander("Show Details"):
                     st.text(error_msg)
             else:
-                df_up = clean_df(df_up)
-                year_dir = os.path.join(BASE_DATA_DIR, str(upload_year))
-                path = os.path.join(year_dir, f"{upload_month}.{ext}")
-                
-                if ext == "csv":
-                    df_up.to_csv(path, index=False)
-                else:
-                    df_up.to_excel(path, index=False)
+                with st.spinner("Saving data..."):
+                    df_up = clean_df(df_up)
+                    year_dir = os.path.join(BASE_DATA_DIR, str(upload_year))
+                    path = os.path.join(year_dir, f"{upload_month}.{ext}")
+                    
+                    if ext == "csv":
+                        df_up.to_csv(path, index=False)
+                    else:
+                        df_up.to_excel(path, index=False, engine='openpyxl')
                 
                 st.success(f"✅ Saved {len(df_up):,} records")
                 st.cache_data.clear()
@@ -581,7 +597,8 @@ with col5:
 # ===============================
 # LOAD DATA
 # ===============================
-df = load_month(month)
+with st.spinner("Loading data..."):
+    df = load_month(month)
 
 if df is None:
     st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
@@ -599,11 +616,21 @@ if not is_valid:
 # STATION VIEW
 # ===============================
 if view_mode == "Station":
-    station_data = compute_station_data(df, month)[station]
+    # Only compute data for the selected station
+    station_data = filter_station_data(df, STATIONS[station], month)
     
-    pm = prev_month(month) if show_comparison else None
-    prev_df = load_month(pm) if pm else None
-    prev_data = compute_station_data(prev_df, pm)[station] if prev_df is not None else None
+    if station_data is None:
+        st.warning(f"No data found for {station} in {month}")
+        st.stop()
+    
+    # Load previous month data only if comparison is enabled
+    prev_data = None
+    if show_comparison:
+        pm = prev_month(month)
+        if pm:
+            prev_df = load_month(pm)
+            if prev_df is not None:
+                prev_data = filter_station_data(prev_df, STATIONS[station], pm)
     
     starts_df = station_data["starts_df"]
     
@@ -678,40 +705,46 @@ if view_mode == "Station":
             st.markdown("<div class='chart-container'>", unsafe_allow_html=True)
             st.markdown("#### 🔥 Ride Heatmap")
             heat = compute_heatmap(starts_df)
-            st.altair_chart(
-                alt.Chart(heat).mark_rect().encode(
-                    x=alt.X("Hour:O", title="Hour"),
-                    y=alt.Y("Day:O", sort=[
-                        "Monday", "Tuesday", "Wednesday", "Thursday", 
-                        "Friday", "Saturday", "Sunday"
-                    ], title="Day"),
-                    color=alt.Color("Rides:Q", scale=alt.Scale(scheme="greens"), title="Rides"),
-                    tooltip=["Day", "Hour", "Rides"]
-                ).properties(height=300),
-                use_container_width=True
-            )
+            if not heat.empty:
+                st.altair_chart(
+                    alt.Chart(heat).mark_rect().encode(
+                        x=alt.X("Hour:O", title="Hour"),
+                        y=alt.Y("Day:O", sort=[
+                            "Monday", "Tuesday", "Wednesday", "Thursday", 
+                            "Friday", "Saturday", "Sunday"
+                        ], title="Day"),
+                        color=alt.Color("Rides:Q", scale=alt.Scale(scheme="greens"), title="Rides"),
+                        tooltip=["Day", "Hour", "Rides"]
+                    ).properties(height=300),
+                    use_container_width=True
+                )
+            else:
+                st.info("No data available for heatmap")
             st.markdown("</div>", unsafe_allow_html=True)
         
         with col2:
             st.markdown("<div class='chart-container'>", unsafe_allow_html=True)
             st.markdown("#### ⏰ Hourly Distribution")
             hourly = compute_hourly_trend(starts_df)
-            st.altair_chart(
-                alt.Chart(hourly).mark_area(
-                    line={'color':'#10b981'},
-                    color=alt.Gradient(
-                        gradient='linear',
-                        stops=[alt.GradientStop(color='#0f1713', offset=0),
-                               alt.GradientStop(color='#10b981', offset=1)],
-                        x1=1, x2=1, y1=1, y2=0
-                    )
-                ).encode(
-                    x=alt.X("Hour:O", title="Hour"),
-                    y=alt.Y("Rides:Q", title="Rides"),
-                    tooltip=["Hour", "Rides"]
-                ).properties(height=300),
-                use_container_width=True
-            )
+            if not hourly.empty:
+                st.altair_chart(
+                    alt.Chart(hourly).mark_area(
+                        line={'color':'#10b981'},
+                        color=alt.Gradient(
+                            gradient='linear',
+                            stops=[alt.GradientStop(color='#0f1713', offset=0),
+                                   alt.GradientStop(color='#10b981', offset=1)],
+                            x1=1, x2=1, y1=1, y2=0
+                        )
+                    ).encode(
+                        x=alt.X("Hour:O", title="Hour"),
+                        y=alt.Y("Rides:Q", title="Rides"),
+                        tooltip=["Hour", "Rides"]
+                    ).properties(height=300),
+                    use_container_width=True
+                )
+            else:
+                st.info("No data available for hourly distribution")
             st.markdown("</div>", unsafe_allow_html=True)
         
         # Monthly Trend
@@ -738,7 +771,8 @@ if view_mode == "Station":
 # ALL STATIONS VIEW
 # ===============================
 else:
-    comparison = compute_station_comparison(df, month)
+    with st.spinner("Computing station comparison..."):
+        comparison = compute_station_comparison(df, month)
     
     st.markdown(f"<h2 style='text-align: center; margin-top: 30px;'>All Stations • {month}</h2>", unsafe_allow_html=True)
     
@@ -762,36 +796,39 @@ else:
     st.markdown("</div>", unsafe_allow_html=True)
     
     # Chart
-    st.markdown("<div class='chart-container'>", unsafe_allow_html=True)
-    chart_data = comparison.sort_values(metric_col, ascending=False)
-    
-    st.altair_chart(
-        alt.Chart(chart_data).mark_bar(
-            cornerRadiusTopRight=10,
-            cornerRadiusBottomRight=10
-        ).encode(
-            x=alt.X(f"{metric_col}:Q", title=metric_col),
-            y=alt.Y("Station:N", sort="-x", title=""),
-            color=alt.Color(
-                "Station:N",
-                scale=alt.Scale(scheme="greens"),
-                legend=None
-            ),
-            tooltip=["Station", metric_col]
-        ).properties(height=400),
-        use_container_width=True
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-    
-    # Data table
-    st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-    st.markdown("### 📋 Detailed Comparison")
-    st.dataframe(
-        comparison.style.format({
-            "Avg Duration": "{:.1f}",
-            "Avg Rating": "{:.2f}"
-        }),
-        use_container_width=True,
-        hide_index=True
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    if not comparison.empty:
+        st.markdown("<div class='chart-container'>", unsafe_allow_html=True)
+        chart_data = comparison.sort_values(metric_col, ascending=False)
+        
+        st.altair_chart(
+            alt.Chart(chart_data).mark_bar(
+                cornerRadiusTopRight=10,
+                cornerRadiusBottomRight=10
+            ).encode(
+                x=alt.X(f"{metric_col}:Q", title=metric_col),
+                y=alt.Y("Station:N", sort="-x", title=""),
+                color=alt.Color(
+                    "Station:N",
+                    scale=alt.Scale(scheme="greens"),
+                    legend=None
+                ),
+                tooltip=["Station", metric_col]
+            ).properties(height=400),
+            use_container_width=True
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        # Data table
+        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+        st.markdown("### 📋 Detailed Comparison")
+        st.dataframe(
+            comparison.style.format({
+                "Avg Duration": "{:.1f}",
+                "Avg Rating": "{:.2f}"
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.warning("No comparison data available")
