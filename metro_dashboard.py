@@ -370,7 +370,7 @@ def preprocess_all_stations(df, month):
         hour_data = None
         day_hour_data = None
         
-        if START_DATE_COL in starts_data.columns:
+        if START_DATE_COL in starts_data.columns and len(starts_data) > 0:
             # Hourly data
             hours = starts_data[START_DATE_COL].dt.hour
             hour_counts = hours.value_counts().sort_index()
@@ -379,11 +379,10 @@ def preprocess_all_stations(df, month):
                 'Rides': hour_counts.values
             })
             
-            # Heatmap data
+            # Heatmap data - using groupby instead of crosstab
             days = starts_data[START_DATE_COL].dt.day_name()
-            day_hour_counts = pd.crosstab(days, hours)
-            day_hour_data = day_hour_counts.stack().reset_index()
-            day_hour_data.columns = ['Day', 'Hour', 'Rides']
+            temp_df = pd.DataFrame({'Day': days, 'Hour': hours})
+            day_hour_data = temp_df.groupby(['Day', 'Hour'], observed=True).size().reset_index(name='Rides')
         
         results[station] = {
             'total_starts': total_starts,
