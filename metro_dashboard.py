@@ -14,9 +14,7 @@ st.set_page_config(page_title="Metro Dashboard", layout="wide", initial_sidebar_
 st.markdown("""
 <style>
     /* Main background */
-    .main {
-        background: linear-gradient(135deg, #0a0f0d 0%, #0f1713 100%);
-    }
+    .main { background: linear-gradient(135deg, #0a0f0d 0%, #0f1713 100%); }
     
     /* Cards */
     .metric-card {
@@ -68,9 +66,7 @@ st.markdown("""
         letter-spacing: 0.5px;
     }
     
-    [data-testid="stMetricDelta"] {
-        font-size: 16px !important;
-    }
+    [data-testid="stMetricDelta"] { font-size: 16px !important; }
     
     /* Selectbox */
     .stSelectbox > div > div {
@@ -78,28 +74,6 @@ st.markdown("""
         border-radius: 10px !important;
         border: 2px solid #065f46 !important;
         color: #f1f5f9 !important;
-    }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(15, 23, 19, 0.5);
-        border-radius: 15px;
-        padding: 10px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        background: rgba(26, 37, 32, 0.5);
-        border-radius: 10px;
-        color: #94a3b8;
-        font-weight: 600;
-        padding: 12px 24px;
-        border: none;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: #1a2520;
-        color: #10b981;
     }
     
     /* Download button */
@@ -112,7 +86,6 @@ st.markdown("""
         font-weight: 600;
         transition: all 0.3s;
     }
-    
     .stDownloadButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);
@@ -131,10 +104,7 @@ st.markdown("""
         background: linear-gradient(180deg, #0a0f0d 0%, #0f1713 100%);
         border-right: 1px solid #065f46;
     }
-    
-    [data-testid="stSidebar"] * {
-        color: #f1f5f9 !important;
-    }
+    [data-testid="stSidebar"] * { color: #f1f5f9 !important; }
     
     /* Chart containers */
     .chart-container {
@@ -147,9 +117,7 @@ st.markdown("""
     }
     
     /* Checkbox */
-    .stCheckbox {
-        color: #f1f5f9 !important;
-    }
+    .stCheckbox { color: #f1f5f9 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -163,11 +131,9 @@ AVAILABLE_YEARS = [2025, 2026]
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
 os.makedirs("config", exist_ok=True)
 
-# Create directories for each year
 for year in AVAILABLE_YEARS:
     os.makedirs(os.path.join(BASE_DATA_DIR, str(year)), exist_ok=True)
 
-# Required columns in uploaded data
 REQUIRED_COLUMNS = {
     "Start": "Station where ride started",
     "End": "Station where ride ended",
@@ -186,12 +152,10 @@ START_DATE_COL = "Start Date Local"
 DURATION_COL = "Duration"
 RATING_COL = "Rating"
 
-# User segmentation thresholds
 LIGHT_USER_MIN = 2
 LIGHT_USER_MAX = 5
 HEAVY_USER_MIN = 6
 
-# Rating thresholds
 MIN_RATING = 1
 MAX_RATING = 5
 POSITIVE_RATING_MIN = 4
@@ -209,18 +173,15 @@ DEFAULT_STATIONS = {
 }
 
 def load_stations():
-    """Load station configuration from file or use defaults."""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception as e:
-            st.error(f"Error loading station config: {e}")
+        except Exception:
             return DEFAULT_STATIONS
     return DEFAULT_STATIONS
 
 def save_stations(stations):
-    """Save station configuration to file."""
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(stations, f, ensure_ascii=False, indent=2)
@@ -235,13 +196,10 @@ STATIONS = load_stations()
 # HELPERS
 # ===============================
 def get_months_for_year(year):
-    """Generate list of months for a given year."""
     return [f"{year}-{str(i).zfill(2)}" for i in range(1, 13)]
 
 def validate_dataframe(df):
-    """Validate that dataframe contains all required columns."""
     missing = [col for col in REQUIRED_COLUMNS.keys() if col not in df.columns]
-    
     if missing:
         error_msg = f"Missing required columns: {', '.join(missing)}\n\n"
         error_msg += "Required columns:\n"
@@ -249,31 +207,21 @@ def validate_dataframe(df):
             status = "✓" if col in df.columns else "✗"
             error_msg += f"{status} {col}: {desc}\n"
         return False, missing, error_msg
-    
     return True, [], ""
 
 def clean_df(df):
-    """Clean and standardize dataframe columns and data types."""
-    df.columns = (
-        df.columns.astype(str)
-        .str.replace("\xa0", " ", regex=False)
-        .str.strip()
-    )
-    
+    """Clean dataframe columns and types."""
+    df.columns = (df.columns.astype(str).str.replace("\xa0", " ", regex=False).str.strip())
     for col in [START_DATE_COL, SIGNUP_COL]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
-    
     if DURATION_COL in df.columns:
         df[DURATION_COL] = pd.to_numeric(df[DURATION_COL], errors="coerce")
-    
     if RATING_COL in df.columns:
         df[RATING_COL] = pd.to_numeric(df[RATING_COL], errors="coerce")
-    
     return df
 
 def prev_month(month):
-    """Get previous month string."""
     y, m = month.split("-")
     y, m = int(y), int(m)
     if m > 1:
@@ -283,113 +231,137 @@ def prev_month(month):
     return None
 
 def trend_delta(current, previous):
-    """Calculate percentage change between current and previous values."""
     if previous in (None, 0) or current is None:
         return None
     return (current - previous) / previous * 100
 
+def export_to_csv(df, filename):
+    return df.to_csv(index=False).encode('utf-8')
+
 # ===============================
-# EXTREME OPTIMIZATION FOR 100K+ ROWS
+# OPTIMIZED CORE LOGIC
 # ===============================
-@st.cache_data(show_spinner=False)
-def load_and_index_month(month):
+
+@st.cache_resource(show_spinner=False)
+def load_data_resource(month):
     """
-    Load data and create INDICES for all stations at once.
-    This is the ONLY time we touch the raw data.
-    Returns: (raw_df, station_indices)
+    Loads data into memory using cache_resource.
+    Returns a POINTER to the dataframe, avoiding serialization lag.
     """
     if not month:
-        return None, None
-    
+        return None
+
     year = month.split("-")[0]
     data_dir = os.path.join(BASE_DATA_DIR, year)
     
-    df = None
-    for ext in ["csv", "xlsx"]:
-        path = os.path.join(data_dir, f"{month}.{ext}")
-        if os.path.exists(path):
-            try:
-                if ext == "csv":
-                    df = pd.read_csv(path)
-                else:
-                    df = pd.read_excel(path, engine='openpyxl')
-                df = clean_df(df)
-                break
-            except Exception as e:
-                st.error(f"Error loading {path}: {e}")
-                return None, None
-    
+    # Priority: Parquet > CSV > XLSX
+    parquet_path = os.path.join(data_dir, f"{month}.parquet")
+    csv_path = os.path.join(data_dir, f"{month}.csv")
+    xlsx_path = os.path.join(data_dir, f"{month}.xlsx")
+
+    try:
+        if os.path.exists(parquet_path):
+            return pd.read_parquet(parquet_path)
+        elif os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
+            return clean_df(df) # Clean logic for legacy files
+        elif os.path.exists(xlsx_path):
+            df = pd.read_excel(xlsx_path, engine='openpyxl')
+            return clean_df(df)
+    except Exception as e:
+        st.error(f"Error loading {month}: {e}")
+        return None
+    return None
+
+@st.cache_data(show_spinner=False)
+def get_station_indices(month):
+    """
+    Compute boolean masks. We pass 'month' (string), NOT the dataframe.
+    Streamlit only hashes the string 'month'.
+    """
+    df = load_data_resource(month)
     if df is None:
-        return None, None
-    
-    # Pre-compute ALL station boolean masks ONCE using vectorization
+        return None
+
     station_indices = {}
-    start_col_values = df[START_COL].astype(str).str.lower()
-    end_col_values = df[END_COL].astype(str).str.lower()
+    # Convert to numpy arrays once for speed
+    start_col_values = df[START_COL].astype(str).str.lower().values
+    end_col_values = df[END_COL].astype(str).str.lower().values
     
     for station, keyword in STATIONS.items():
         keyword_lower = keyword.lower()
-        start_mask = start_col_values.str.contains(keyword_lower, na=False, regex=False)
-        end_mask = end_col_values.str.contains(keyword_lower, na=False, regex=False)
+        # Create masks using Pandas vectorized operations, then convert to numpy
+        start_mask = pd.Series(start_col_values).str.contains(keyword_lower, regex=False, na=False).values
+        end_mask = pd.Series(end_col_values).str.contains(keyword_lower, regex=False, na=False).values
         
         station_indices[station] = {
             'start_mask': start_mask,
             'end_mask': end_mask,
             'both_mask': start_mask & end_mask
         }
-    
-    return df, station_indices
+    return station_indices
 
 @st.cache_data(show_spinner=False)
-def compute_all_metrics(df, station_indices, month):
+def compute_all_metrics(month):
     """
-    Compute ALL metrics for ALL stations using PURE VECTORIZATION.
-    NO loops through rows, NO repeated dataframe operations.
+    Refactored to take 'month' string.
+    Loads data via cached resource, minimizing serialization overhead.
     """
-    results = {}
-    signup_month_str = month[:7]  # "2025-01"
+    df = load_data_resource(month)
+    station_indices = get_station_indices(month)
     
-    # Pre-extract arrays ONCE (much faster than repeated df access)
+    if df is None or station_indices is None:
+        return {}
+
+    results = {}
+    signup_month_str = month[:7]
+    
+    # Pre-extract arrays ONCE 
     user_ids = df[USER_COL].values
-    signup_dates = df[SIGNUP_COL].dt.to_period("M").astype(str).values
+    
+    # Optimize signup date comparison
+    if not pd.api.types.is_string_dtype(df[SIGNUP_COL]):
+         signup_dates = df[SIGNUP_COL].dt.to_period("M").astype(str).values
+    else:
+         signup_dates = df[SIGNUP_COL].values
+         
     durations = df[DURATION_COL].values
     ratings = df[RATING_COL].values
     hours = df[START_DATE_COL].dt.hour.values
     days = df[START_DATE_COL].dt.day_name().values
     
-    # Valid rating mask (apply once)
+    # Valid rating mask
     valid_rating_mask = (ratings >= MIN_RATING) & (ratings <= MAX_RATING) & ~np.isnan(ratings)
     
     for station, masks in station_indices.items():
-        start_mask = masks['start_mask'].values
-        end_mask = masks['end_mask'].values
-        both_mask = masks['both_mask'].values
+        start_mask = masks['start_mask']
+        end_mask = masks['end_mask']
+        both_mask = masks['both_mask']
         
         total_starts = start_mask.sum()
         
         if total_starts == 0:
             continue
         
-        # Get station users using numpy (MUCH faster)
+        # User Stats (Vectorized)
         station_users = user_ids[start_mask]
         unique_users = np.unique(station_users)
         total_riders = len(unique_users)
         
-        # New signups - vectorized
         station_signups = signup_dates[start_mask]
         new_signups = (station_signups == signup_month_str).sum()
         
-        # Rides per user - using numpy bincount (extremely fast)
+        # Ride Frequency counts
         user_ride_counts = np.bincount(np.searchsorted(unique_users, station_users))
         one_time = (user_ride_counts == 1).sum()
         light = ((user_ride_counts >= LIGHT_USER_MIN) & (user_ride_counts <= LIGHT_USER_MAX)).sum()
         heavy = (user_ride_counts >= HEAVY_USER_MIN).sum()
         
-        # Duration - vectorized
+        # Durations
         station_durations = durations[start_mask]
         avg_duration = np.nanmean(station_durations)
         
-        # Ratings - vectorized
+        # Ratings
         station_rating_mask = start_mask & valid_rating_mask
         station_ratings = ratings[station_rating_mask]
         
@@ -399,25 +371,15 @@ def compute_all_metrics(df, station_indices, month):
         else:
             avg_rating = None
             positive_pct = None
-        
-        # Chart data - using numpy operations
+            
+        # Charts
         station_hours = hours[start_mask]
-        station_days = days[start_mask]
-        
-        # Hourly counts - ultra fast with bincount
         hour_counts = np.bincount(station_hours[~np.isnan(station_hours)].astype(int), minlength=24)
-        hour_data = pd.DataFrame({
-            'Hour': np.arange(24),
-            'Rides': hour_counts
-        })
-        hour_data = hour_data[hour_data['Rides'] > 0]  # Only non-zero hours
+        hour_data = pd.DataFrame({'Hour': np.arange(24), 'Rides': hour_counts})
+        hour_data = hour_data[hour_data['Rides'] > 0]
         
-        # Heatmap - using pandas groupby on minimal data
-        day_hour_df = pd.DataFrame({
-            'Day': station_days,
-            'Hour': station_hours
-        }).dropna()
-        
+        station_days = days[start_mask]
+        day_hour_df = pd.DataFrame({'Day': station_days, 'Hour': station_hours}).dropna()
         if len(day_hour_df) > 0:
             day_hour_data = day_hour_df.groupby(['Day', 'Hour'], observed=True).size().reset_index(name='Rides')
         else:
@@ -445,24 +407,23 @@ def compute_all_metrics(df, station_indices, month):
 
 @st.cache_data(show_spinner=False)
 def compute_monthly_trends():
-    """Pre-compute monthly trends for all stations."""
+    """Optimized trend computation."""
     uploaded_months = get_uploaded_months()
     station_trends = {station: [] for station in STATIONS.keys()}
     
     for m in uploaded_months:
-        df, indices = load_and_index_month(m)
-        if df is None or indices is None:
+        indices = get_station_indices(m)
+        if indices is None:
             continue
-        
+            
         for station, masks in indices.items():
             count = masks['start_mask'].sum()
             station_trends[station].append({'Month': m, 'Start Rides': int(count)})
-    
+            
     return {station: pd.DataFrame(data) for station, data in station_trends.items()}
 
 @st.cache_data(show_spinner=False)
 def get_uploaded_months(year=None):
-    """Get list of months that have data uploaded."""
     uploaded = []
     years_to_check = [year] if year else AVAILABLE_YEARS
     
@@ -472,19 +433,10 @@ def get_uploaded_months(year=None):
             continue
         months = get_months_for_year(y)
         for m in months:
-            for ext in ["csv", "xlsx"]:
-                if os.path.exists(os.path.join(data_dir, f"{m}.{ext}")):
-                    uploaded.append(m)
-                    break
-    
+            # Check for Parquet first, then legacy
+            if any(os.path.exists(os.path.join(data_dir, f"{m}.{ext}")) for ext in ["parquet", "csv", "xlsx"]):
+                uploaded.append(m)
     return sorted(uploaded)
-
-# ===============================
-# EXPORT FUNCTIONS
-# ===============================
-def export_to_csv(df, filename):
-    """Convert DataFrame to CSV for download."""
-    return df.to_csv(index=False).encode('utf-8')
 
 # ===============================
 # SIDEBAR
@@ -517,51 +469,41 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📅 Upload Monthly Data")
     
-    upload_year = st.selectbox(
-        "Select Year", 
-        AVAILABLE_YEARS, 
-        key="upload_year_select",
-        index=len(AVAILABLE_YEARS)-1
-    )
-    
+    upload_year = st.selectbox("Select Year", AVAILABLE_YEARS, index=len(AVAILABLE_YEARS)-1, key="upload_year_select")
     upload_months = get_months_for_year(upload_year)
     upload_month = st.selectbox("Select Month", upload_months, key="upload_month_select")
     
-    file = st.file_uploader(
-        f"Upload data for {upload_month}",
-        type=["csv", "xlsx"],
-        key="file_uploader",
-    )
+    file = st.file_uploader(f"Upload data for {upload_month}", type=["csv", "xlsx"], key="file_uploader")
     
     if file:
         try:
             ext = file.name.split(".")[-1]
-            
-            with st.spinner("Loading file..."):
+            with st.spinner("Processing file..."):
                 if ext == "csv":
                     df_up = pd.read_csv(file)
                 else:
                     df_up = pd.read_excel(file, engine='openpyxl')
             
-            is_valid, missing, error_msg = validate_dataframe(df_up)
+                is_valid, missing, error_msg = validate_dataframe(df_up)
             
-            if not is_valid:
-                st.error("❌ Invalid format")
-                with st.expander("Show Details"):
-                    st.text(error_msg)
-            else:
-                with st.spinner("Saving data..."):
-                    df_up = clean_df(df_up)
-                    year_dir = os.path.join(BASE_DATA_DIR, str(upload_year))
-                    path = os.path.join(year_dir, f"{upload_month}.{ext}")
-                    
-                    if ext == "csv":
-                        df_up.to_csv(path, index=False)
-                    else:
-                        df_up.to_excel(path, index=False, engine='openpyxl')
+                if not is_valid:
+                    st.error("❌ Invalid format")
+                    with st.expander("Show Details"):
+                        st.text(error_msg)
+                else:
+                    with st.spinner("Optimizing & Saving as Parquet..."):
+                        # Clean and Standardize
+                        df_up = clean_df(df_up)
+                        
+                        year_dir = os.path.join(BASE_DATA_DIR, str(upload_year))
+                        save_path = os.path.join(year_dir, f"{upload_month}.parquet")
+                        
+                        # Save as Parquet for speed
+                        df_up.to_parquet(save_path, index=False)
                 
-                st.success(f"✅ Saved {len(df_up):,} records")
-                st.cache_data.clear()
+                st.success(f"✅ Saved {len(df_up):,} records (Optimized)")
+                st.cache_data.clear() # Clear cache so new data appears
+                st.cache_resource.clear()
                 
         except Exception as e:
             st.error(f"❌ Error: {e}")
@@ -572,7 +514,6 @@ with st.sidebar:
     
     for year in AVAILABLE_YEARS:
         uploaded = get_uploaded_months(year)
-        
         if uploaded:
             st.markdown(f"**{year}**")
             for m in uploaded:
@@ -580,13 +521,15 @@ with st.sidebar:
                 col1.markdown(f"✓ {m}")
                 if col2.button("🗑️", key=f"del_{m}"):
                     year_from_month = m.split("-")[0]
-                    for e in ["csv", "xlsx"]:
+                    # Remove all variants
+                    for e in ["parquet", "csv", "xlsx"]:
                         path = os.path.join(BASE_DATA_DIR, year_from_month, f"{m}.{e}")
                         if os.path.exists(path):
                             os.remove(path)
                     st.cache_data.clear()
+                    st.cache_resource.clear()
                     st.rerun()
-    
+
     if not get_uploaded_months():
         st.info("No data uploaded yet")
 
@@ -603,42 +546,28 @@ col1, col2, col3, col4, col5 = st.columns([2, 1, 2, 1, 1])
 
 with col1:
     station = st.selectbox("🚉 Station", list(STATIONS.keys()), label_visibility="collapsed", placeholder="Select Station")
-
 with col2:
     selected_year = st.selectbox("📆 Year", AVAILABLE_YEARS, label_visibility="collapsed", index=len(AVAILABLE_YEARS)-1)
-
 with col3:
     available_months = get_months_for_year(selected_year)
     month = st.selectbox("📅 Month", available_months, label_visibility="collapsed", placeholder="Select Month")
-
 with col4:
     show_comparison = st.checkbox("📊 Compare", value=False, help="Compare with previous month")
-
 with col5:
     view_mode = st.selectbox("View", ["Station", "All Stations"], label_visibility="collapsed")
 
 # ===============================
-# LOAD & PROCESS DATA
+# CALCULATE METRICS (Pure String Passing)
 # ===============================
-df, station_indices = load_and_index_month(month)
 
-if df is None:
+# We only call the computation if we have data for that month in the list
+# but the function handles missing files gracefully anyway.
+all_station_data = compute_all_metrics(month)
+
+if not all_station_data:
     st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
     st.warning(f"⚠️ No data available for {month}. Please upload data using the sidebar.")
     st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
-
-is_valid, missing, error_msg = validate_dataframe(df)
-if not is_valid:
-    st.error("❌ Data validation failed")
-    st.text(error_msg)
-    st.stop()
-
-# COMPUTE ALL METRICS - This is fast even with 120k rows!
-all_station_data = compute_all_metrics(df, station_indices, month)
-
-if not all_station_data:
-    st.warning("No station data available")
     st.stop()
 
 # ===============================
@@ -651,21 +580,18 @@ if view_mode == "Station":
     
     station_data = all_station_data[station]
     
-    # Load previous month data only if comparison is enabled
+    # Comparison Logic
     prev_data = None
     if show_comparison:
         pm = prev_month(month)
         if pm:
-            prev_df, prev_indices = load_and_index_month(pm)
-            if prev_df is not None and prev_indices is not None:
-                prev_all_data = compute_all_metrics(prev_df, prev_indices, pm)
-                prev_data = prev_all_data.get(station)
+            prev_all_data = compute_all_metrics(pm)
+            prev_data = prev_all_data.get(station)
     
     # Hero Stats
     st.markdown(f"<h2 style='text-align: center; margin-top: 30px;'>{station} • {month}</h2>", unsafe_allow_html=True)
     
     def metric(col, label, value, prev_value, fmt=None, help_text=None):
-        """Display metric with optional comparison."""
         delta = trend_delta(value, prev_value) if show_comparison and prev_value else None
         formatted_value = fmt.format(value) if fmt and value is not None else value
         
@@ -697,7 +623,6 @@ if view_mode == "Station":
     metric(cols[4], "⭐ Rating", station_data["avg_rating"], 
            prev_data["avg_rating"] if prev_data else None, "{:.2f}",
            help_text="Average rating (1-5)")
-    
     st.markdown("</div>", unsafe_allow_html=True)
     
     # USER PERFORMANCE
@@ -720,7 +645,6 @@ if view_mode == "Station":
     metric(cols2[4], "🔥 Heavy Users", station_data["heavy"], 
            prev_data["heavy"] if prev_data else None,
            help_text=f"Users with {HEAVY_USER_MIN}+ rides")
-    
     st.markdown("</div>", unsafe_allow_html=True)
     
     # Charts
@@ -810,7 +734,6 @@ else:
     
     st.markdown(f"<h2 style='text-align: center; margin-top: 30px;'>All Stations • {month}</h2>", unsafe_allow_html=True)
     
-    # Metric selector
     st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -829,7 +752,6 @@ else:
         )
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # Chart
     if not comparison.empty:
         st.markdown("<div class='chart-container'>", unsafe_allow_html=True)
         chart_data = comparison.sort_values(metric_col, ascending=False)
@@ -852,7 +774,6 @@ else:
         )
         st.markdown("</div>", unsafe_allow_html=True)
         
-        # Data table
         st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
         st.markdown("### 📋 Detailed Comparison")
         st.dataframe(
